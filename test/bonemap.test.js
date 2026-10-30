@@ -96,3 +96,25 @@ test('generic CesiumMan-style names never map two slots onto one bone', () => {
   assert.equal(m.bones.head.name, 'Skeleton_neck_joint_2');
   assert.equal(m.bones.leftHand.name, 'Skeleton_arm_joint_L__2_');
 });
+
+test('real Meshy Rigging API skeleton maps fully with the correct spine order and no end markers', () => {
+  // Joint names exactly as returned by POST /openapi/v1/rigging (rigged_character_glb_url), Oct 2026
+  const P = [
+    ['Hips', null, 0, 1, 0], ['Spine', 'Hips', 0, 0.1, 0], ['Spine01', 'Spine', 0, 0.12, 0], ['Spine02', 'Spine01', 0, 0.12, 0],
+    ['neck', 'Spine02', 0, 0.15, 0], ['Head', 'neck', 0, 0.1, 0], ['head_end', 'Head', 0, 0.2, 0], ['headfront', 'Head', 0, 0.05, 0.1],
+    ['LeftShoulder', 'Spine02', 0.05, 0.1, 0], ['LeftArm', 'LeftShoulder', 0.1, 0, 0], ['LeftForeArm', 'LeftArm', 0.25, 0, 0], ['LeftHand', 'LeftForeArm', 0.25, 0, 0],
+    ['RightShoulder', 'Spine02', -0.05, 0.1, 0], ['RightArm', 'RightShoulder', -0.1, 0, 0], ['RightForeArm', 'RightArm', -0.25, 0, 0], ['RightHand', 'RightForeArm', -0.25, 0, 0],
+    ['LeftUpLeg', 'Hips', 0.1, -0.05, 0], ['LeftLeg', 'LeftUpLeg', 0, -0.45, 0], ['LeftFoot', 'LeftLeg', 0, -0.45, 0], ['LeftToeBase', 'LeftFoot', 0, -0.05, 0.1],
+    ['RightUpLeg', 'Hips', -0.1, -0.05, 0], ['RightLeg', 'RightUpLeg', 0, -0.45, 0], ['RightFoot', 'RightLeg', 0, -0.45, 0], ['RightToeBase', 'RightFoot', 0, -0.05, 0.1],
+  ];
+  const { root } = chainFrom(null, P);
+  const m = buildBoneMap(root);
+  assert.equal(m.coverage, 1);
+  assert.equal(m.report.filter(r => !r.bone).length, 0);
+  assert.equal(m.bones.spine.name, 'Spine'); assert.equal(m.bones.chest.name, 'Spine01'); assert.equal(m.bones.upperChest.name, 'Spine02');
+  assert.equal(m.bones.neck.name, 'neck'); assert.equal(m.bones.head.name, 'Head');
+  assert.equal(m.bones.leftLowerLeg.name, 'LeftLeg'); assert.equal(m.bones.rightToes.name, 'RightToeBase');
+  const used = Object.values(m.bones).map(b => b.name);
+  assert.ok(!used.includes('head_end') && !used.includes('headfront'), 'end markers unused');
+  assert.equal(classifyName('headfront').slot, null);
+});

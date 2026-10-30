@@ -31,7 +31,11 @@ song onto the page. `?model=/x.glb&audio=/song.mp3` loads files from `public/`.
 | **In the app** | Copy `.env.example` → `.env`, set `MESHY_API_KEY`, `npm run dev`. In **Rig with Meshy**, paste a public `.glb` URL or a Meshy task id and press **Rig & load**. The dev server proxies `/api/meshy/*` to `api.meshy.ai` and injects the key, so it never reaches the browser. Walking/running clips come along; **Add Meshy animation** applies a library `action_id`. |
 | **CLI** | `npm run rig -- --model ./char.glb` (local file → data URI), `--model-url https://…/char.glb`, or `--task-id <meshy_task_id>`; add `--animate 5,12` for library actions, `--dry-run` to print the request. Output: `output/<rig_task_id>/rigged.glb` + animations + `task.json`. |
 
-Meshy auto-rigging wants a textured bipedal humanoid in a clear A/T-pose with distinct limbs.
+| **Generate one** | `node scripts/meshy-generate.mjs --prompt "stylized humanoid dancer, hoodie and sneakers"` runs Text-to-3D preview → refine with `pose_mode: a-pose` and downloads `output/<refine_id>/model.glb`; then `npm run rig -- --task-id <refine_id>`. |
+
+Meshy auto-rigging wants a textured bipedal humanoid in a clear A/T-pose with distinct limbs,
+facing +Z. Behind a corporate proxy, run the Node scripts (and `npm run dev`) with
+`NODE_USE_ENV_PROXY=1` so `fetch` honours `HTTPS_PROXY`.
 Any other humanoid rig works too (Mixamo, VRM, Unreal mannequin, Rigify, Character Creator…).
 
 ## 2. Dance live
