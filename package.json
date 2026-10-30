@@ -1,0 +1,20 @@
+{
+  "name": "meshy-dance",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Rig a Meshy humanoid and make it dance to the transients and beat of any music, in the browser.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "node --test test/*.test.js",
+    "rig": "node scripts/meshy-rig.mjs"
+  },
+  "dependencies": {
+    "three": "^0.170.0"
+  },
+  "devDependencies": {
+    "vite": "^6.0.0"
+  }
+}

@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Meshy Dance</title>
+  <link rel="stylesheet" href="/src/style.css" />
+</head>
+<body>
+  <canvas id="view"></canvas>
+
+  <aside id="panel">
+    <header>
+      <h1>Meshy Dance</h1>
+      <p class="sub">Audio-reactive rig driver. Drop a rigged <b>.glb</b> and a song anywhere.</p>
+    </header>
+
+    <section>
+      <h2>Model</h2>
+      <div class="row">
+        <label class="btn file">Load rigged GLB<input id="glbFile" type="file" accept=".glb,.gltf,model/gltf-binary" hidden /></label>
+        <button id="mannequinBtn" class="btn ghost">Mannequin</button>
+      </div>
+      <div class="row">
+        <label class="btn file ghost">Add animation GLB (clips)<input id="clipFile" type="file" accept=".glb,.gltf" hidden /></label>
+        <label class="chk"><input id="showSkel" type="checkbox" /> Skeleton</label>
+      </div>
+      <details id="boneMapDetails">
+        <summary>Bone map <span id="boneMapSummary" class="pill">—</span></summary>
+        <table id="boneMapTable"></table>
+      </details>
+    </section>
+
+    <section>
+      <h2>Audio</h2>
+      <div class="row">
+        <label class="btn file">Load song<input id="audioFile" type="file" accept="audio/*" hidden /></label>
+        <button id="micBtn" class="btn ghost">Microphone</button>
+      </div>
+      <div class="row">
+        <button id="demoBtn" class="btn ghost">Demo beat</button>
+        <label class="inline">BPM <input id="demoBpm" type="number" min="60" max="200" value="124" /></label>
+        <button id="stopBtn" class="btn ghost">Stop</button>
+      </div>
+      <label class="inline">Tempo override <input id="manualBpm" type="number" min="0" max="240" value="0" title="0 = auto" /> <small>(0 = auto)</small></label>
+      <div class="meters">
+        <div class="bpm"><span id="bpmVal">—</span><small>BPM</small> <span id="lockPill" class="pill">unlocked</span>
+          <span class="octave"><button id="halfBtn" class="mini" title="Half tempo">½×</button><button id="dblBtn" class="mini" title="Double tempo">2×</button></span></div>
+        <div class="phase"><div id="phaseBar"></div></div>
+        <div class="bands">
+          <div class="band"><i id="bandLow"></i><b id="hitLow"></b><span>kick</span></div>
+          <div class="band"><i id="bandMid"></i><b id="hitMid"></b><span>snare</span></div>
+          <div class="band"><i id="bandHigh"></i><b id="hitHigh"></b><span>hats</span></div>
+          <div class="band"><i id="bandRms"></i><span>level</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <h2>Dance</h2>
+      <label class="slider">Intensity <input id="intensity" type="range" min="0" max="2" step="0.01" value="1" /><output>1.00</output></label>
+      <label class="slider">Hit response <input id="hitGain" type="range" min="0" max="2.5" step="0.01" value="1" /><output>1.00</output></label>
+      <label class="slider">Smoothing <input id="smoothing" type="range" min="0" max="0.3" step="0.005" value="0.07" /><output>0.07</output></label>
+      <div class="row">
+        <label class="chk"><input id="autoMoves" type="checkbox" checked /> Auto moves</label>
+        <select id="moveSel"></select>
+      </div>
+      <div class="row">
+        <label class="inline">Switch every <input id="switchBeats" type="number" min="1" max="64" value="8" /> beats</label>
+      </div>
+      <div id="clipBox" class="hidden">
+        <div class="row">
+          <label class="inline">Clip <select id="clipSel"><option value="">none (procedural only)</option></select></label>
+        </div>
+        <div class="row">
+          <label class="chk"><input id="clipSync" type="checkbox" checked /> Lock to beat</label>
+          <label class="inline">beats/loop <input id="beatsPerLoop" type="number" min="0.5" max="32" step="0.5" value="2" /></label>
+        </div>
+        <label class="slider">Procedural on top <input id="procWeight" type="range" min="0" max="1" step="0.01" value="0.6" /><output>0.60</output></label>
+      </div>
+      <p class="status" id="moveStatus"></p>
+    </section>
+
+    <section>
+      <h2>Rig with Meshy</h2>
+      <p class="hint">Runs through the dev-server proxy. Set <code>MESHY_API_KEY</code> in <code>.env</code>.</p>
+      <input id="meshyInput" type="text" placeholder="Public .glb URL or Meshy task id" />
+      <div class="row">
+        <label class="inline">Height m <input id="meshyHeight" type="number" min="0.1" max="10" step="0.1" value="1.7" /></label>
+        <button id="meshyRigBtn" class="btn">Rig &amp; load</button>
+      </div>
+      <div class="row">
+        <input id="meshyActionId" type="number" placeholder="action id" min="0" />
+        <button id="meshyAnimBtn" class="btn ghost" disabled>Add Meshy animation</button>
+      </div>
+      <p class="status" id="meshyStatus"></p>
+    </section>
+
+    <footer><span id="fps"></span></footer>
+  </aside>
+
+  <div id="drop" class="hidden">Drop a .glb model or an audio file</div>
+  <div id="toast" class="hidden"></div>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
