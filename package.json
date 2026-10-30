@@ -9,12 +9,51 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "node --test test/*.test.js",
-    "rig": "node scripts/meshy-rig.mjs"
+    "rig": "node scripts/meshy-rig.mjs",
+    "build:lib": "vite build -c vite.lib.config.js",
+    "bake": "node scripts/bake.mjs"
   },
   "dependencies": {
-    "three": "^0.170.0"
+    "@gltf-transform/core": "^4.5.1",
+    "three": ">=0.160.0"
   },
   "devDependencies": {
     "vite": "^6.0.0"
+  },
+  "main": "./src/lib.js",
+  "module": "./src/lib.js",
+  "exports": {
+    ".": {
+      "import": "./src/lib.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "scripts",
+    "dist-lib",
+    "README.md",
+    "LICENSE"
+  ],
+  "license": "MIT",
+  "keywords": [
+    "meshy",
+    "three",
+    "threejs",
+    "rigging",
+    "animation",
+    "audio-reactive",
+    "beat-detection",
+    "dance",
+    "gltf",
+    "glb",
+    "game"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/serafin-meshy/Dance.git"
+  },
+  "peerDependencies": {
+    "three": ">=0.160.0"
   }
 }

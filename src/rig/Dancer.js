@@ -21,8 +21,9 @@ export class Dancer {
    * @param {import('three').Object3D} root  the loaded model (scene) containing the skeleton
    * @param {ReturnType<import('./BoneMap.js').buildBoneMap>} boneMap
    */
-  constructor(root, boneMap, { forward = new Vector3(0, 0, 1) } = {}) {
+  constructor(root, boneMap, { forward = new Vector3(0, 0, 1), relaxedArmAngle = 0.35 } = {}) {
     this.root = root;
+    this.relaxedArmAngle = relaxedArmAngle;
     this.map = boneMap;
     this.bones = boneMap.bones;
     this.forward = forward.clone().normalize();
@@ -50,6 +51,18 @@ export class Dancer {
     const box = new Box3().setFromObject(root);
     this.height = Math.max(0.2, box.max.y - box.min.y);
 
+    // Rest-pose neutralisation: rigs are bound in T- or A-pose, but the moves are authored
+    // relative to a relaxed stance (arms hanging ~20 deg from vertical). Measure each upper
+    // arm's bind angle from straight-down and store the correction applied under every pose.
+    this.neutral = { armRaiseL: 0, armRaiseR: 0 };
+    for (const [side, key] of [['left', 'armRaiseL'], ['right', 'armRaiseR']]) {
+      const up = this.bones[`${side}UpperArm`], lo = this.bones[`${side}LowerArm`];
+      if (!up || !lo) continue;
+      const dir = this.limbDir(up, lo, new Vector3(0, -1, 0), new Vector3());
+      const angleFromDown = Math.acos(Math.max(-1, Math.min(1, -dir.y)));
+      this.neutral[key] = Math.min(0, this.relaxedArmAngle - angleFromDown);  // never raise, only lower
+    }
+
     // springs for transient hits
     this.springs = {
       bounce: new Spring(180, 14),
@@ -73,11 +86,34 @@ export class Dancer {
     this.mixer = null; this.action = null; this.clip = null;
     this.beatCount = 0;
     this.stats = { lastMove: 'groove', lastHit: '' };
+    this.rng = Math.random;
+  }
+
+  /** Use a deterministic move sequence (for reproducible bakes). */
+  seed(seed = 1) {
+    let a = (seed >>> 0) || 1;
+    this.rng = () => { a |= 0; a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  }
+
+  /** Reset dynamic state (springs, smoothing, move blend) so a bake starts from a clean pose. */
+  resetState(move = 'groove') {
+    for (const sp of Object.values(this.springs)) sp.set(0);
+    this.moveA = move; this.moveB = null; this.blend = 0;
+    for (const k of POSE_KEYS) { this.pose[k] = 0; this.target[k] = 0; }
+    this.lastSwitchBeat = -1; this.idleClock = 0; this.energy = 0; this.hitSide = 1;
+    for (const [b, r] of this.rest) { b.quaternion.copy(r.q); b.position.copy(r.p); }
   }
 
   /** Replace the rest pose with the skeleton's current pose (e.g. after posing in another tool). */
   captureRest() {
     for (const b of this.rest.keys()) this.rest.set(b, { q: b.quaternion.clone(), p: b.position.clone() });
+    this.root.updateWorldMatrix(true, true);
+    for (const [side, key] of [['left', 'armRaiseL'], ['right', 'armRaiseR']]) {
+      const up = this.bones[`${side}UpperArm`], lo = this.bones[`${side}LowerArm`];
+      if (!up || !lo) continue;
+      const dir = this.limbDir(up, lo, new Vector3(0, -1, 0), new Vector3());
+      this.neutral[key] = Math.min(0, this.relaxedArmAngle - Math.acos(Math.max(-1, Math.min(1, -dir.y))));
+    }
   }
 
   setClip(clip) {
@@ -187,10 +223,10 @@ export class Dancer {
     if (!musicOn && !f.locked && f.rms < 0.02) {
       if (this.moveA !== 'idle' && this.moveB !== 'idle') this.setMove('idle');
     } else if (this.moveA === 'idle' && !this.moveB) {
-      this.setMove(P.autoMoves ? pickMove(this.energy, 'idle') : P.move);
+      this.setMove(P.autoMoves ? pickMove(this.energy, 'idle', this.rng) : P.move);
     } else if (P.autoMoves && f.locked && f.beat && f.beatIndex % P.switchEveryBeats === 0 && f.beatIndex !== this.lastSwitchBeat && !this.moveB) {
       this.lastSwitchBeat = f.beatIndex;
-      const next = pickMove(this.energy, this.moveA);
+      const next = pickMove(this.energy, this.moveA, this.rng);
       if (next !== this.moveA) this.setMove(next);
     } else if (!P.autoMoves && P.move !== this.moveA && !this.moveB && musicOn) {
       this.setMove(P.move);
@@ -289,10 +325,12 @@ export class Dancer {
     // shoulders: raise toward up
     if (B.leftShoulder) this.swing(B.leftShoulder, B.leftUpperArm, SD, UP, p.shoulderL * w);
     if (B.rightShoulder) this.swing(B.rightShoulder, B.rightUpperArm, right, UP, p.shoulderR * w);
-    // arms
-    this.swing(B.leftUpperArm, B.leftLowerArm, _vDownL.copy(SD).multiplyScalar(0.3).addScaledVector(UP, -1).normalize(), UP, p.armRaiseL * w);
+    // arms (neutral correction lowers T/A-pose arms to a relaxed hang; it is part of the base pose,
+    // so it is applied at full weight even when layering over a clip only lightly)
+    const nL = this.neutral.armRaiseL * (this.mixer ? w : 1), nR = this.neutral.armRaiseR * (this.mixer ? w : 1);
+    this.swing(B.leftUpperArm, B.leftLowerArm, _vDownL.copy(SD).multiplyScalar(0.3).addScaledVector(UP, -1).normalize(), UP, nL + p.armRaiseL * w);
     this.swing(B.leftUpperArm, B.leftLowerArm, _vDownL, F, p.armFwdL * w);
-    this.swing(B.rightUpperArm, B.rightLowerArm, _vDownR.copy(right).multiplyScalar(0.3).addScaledVector(UP, -1).normalize(), UP, p.armRaiseR * w);
+    this.swing(B.rightUpperArm, B.rightLowerArm, _vDownR.copy(right).multiplyScalar(0.3).addScaledVector(UP, -1).normalize(), UP, nR + p.armRaiseR * w);
     this.swing(B.rightUpperArm, B.rightLowerArm, _vDownR, F, p.armFwdR * w);
     // elbows bend toward forward+up
     _vBend.copy(F).add(UP).normalize();

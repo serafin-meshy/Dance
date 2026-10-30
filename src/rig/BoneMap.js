@@ -153,12 +153,32 @@ export function buildBoneMap(root, overrides = {}) {
     if (!bones.neck) { bones.neck = neckCandidates[0].bone; via.neck = 'name'; }
   }
 
-  // 3. structural fallback for anything still missing
+  // 3. structural fallback for anything still missing, and for conflicts: generic names such as
+  //    "torso_joint_1" / "leg_joint_L_1" can land two slots on one bone, in which case topology wins.
   const missing = SLOTS.filter(s => !bones[s]);
-  if (missing.length && all.length >= 10) {
+  const dupSlots = () => { const seen = new Map(); const out = new Set(); for (const [slot, b] of Object.entries(bones)) { if (seen.has(b)) { out.add(slot); out.add(seen.get(b)); } else seen.set(b, slot); } return [...out]; };
+  if ((missing.length || dupSlots().length) && all.length >= 10) {
     try {
-      const guess = structuralGuess(root, all, bones);
-      for (const s of missing) if (guess[s] && !bones[s]) { bones[s] = guess[s]; via[s] = 'structure'; }
+      const known = {};
+      for (const [slot, b] of Object.entries(bones)) if (via[slot] === 'override') known[slot] = b;
+      if (!known.hips && bones.hips && !dupSlots().includes('hips')) known.hips = bones.hips;
+      const guess = structuralGuess(root, all, known);
+      // a name-based slot holding a bone that topology assigns to a different slot yields to topology
+      for (const slot of SLOTS) {
+        const g = guess[slot]; if (!g) continue;
+        for (const other of SLOTS) {
+          if (other === slot || via[other] !== 'name' || bones[other] !== g) continue;
+          if (guess[other] !== g) { delete bones[other]; delete via[other]; }
+        }
+      }
+      const used = new Set(Object.values(bones));
+      for (const slot of SLOTS) {
+        if (bones[slot] || !guess[slot] || used.has(guess[slot])) continue;
+        bones[slot] = guess[slot]; via[slot] = 'structure'; used.add(guess[slot]);
+      }
+      // last resort: never leave one bone on two slots
+      const seen = new Set();
+      for (const slot of SLOTS) { const b = bones[slot]; if (!b) continue; if (seen.has(b)) { delete bones[slot]; delete via[slot]; } else seen.add(b); }
     } catch (e) { /* best effort */ }
   }
 

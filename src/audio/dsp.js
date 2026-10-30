@@ -169,7 +169,7 @@ export class OnsetDetector {
 export class BeatTracker {
   constructor({
     minBpm = 70, maxBpm = 180, window = 8.0, reestimateEvery = 0.5,
-    priorBpm = 115, priorWidth = 0.9, hysteresis = 1.12, phaseGain = 0.35, novHz = 100,
+    priorBpm = 115, priorWidth = 0.9, hysteresis = 1.12, phaseGain = 0.35, novHz = 100, switchVotes = 3, continuity = 0.8, minOnsets = 6,
   } = {}) {
     this.minBpm = minBpm; this.maxBpm = maxBpm;
     this.window = window;
@@ -177,6 +177,11 @@ export class BeatTracker {
     this.priorBpm = priorBpm; this.priorWidth = priorWidth;
     this.hysteresis = hysteresis;
     this.phaseGain = phaseGain;
+    this.switchVotes = switchVotes;
+    this.continuity = continuity;
+    this.minOnsets = minOnsets;
+    this._pending = null;
+    this._stable = 0;      // consecutive estimates that agreed with the current tempo
 
     /** @type {{t:number, s:number}[]} */
     this.onsets = [];
@@ -188,6 +193,7 @@ export class BeatTracker {
     this.beatIndex = -1;
     this.lastEstimate = -Infinity;
     this.hits = [];         // recent predicted beats: 1 if an onset confirmed it
+    this._locked = false;
 
     // novelty ring buffer
     this.novHz = novHz;
@@ -247,6 +253,9 @@ export class BeatTracker {
   _estimateTempo(now) {
     const have = this.lastBin - this.firstBin + 1;
     if (this.firstBin < 0 || have < 2.5 * this.novHz) return;
+    // Too few transients in the window (sparse / ambient material): there is no beat to find,
+    // so keep whatever we have rather than chasing noise in the autocorrelation.
+    if (this.onsets.length < this.minOnsets) return;
     const N = Math.min(this.novLen, have);
     // linearise ring: oldest -> newest ending at lastBin
     const lin = this._lin;
@@ -283,21 +292,54 @@ export class BeatTracker {
       return Math.max(0, sc) * this._prior(P);
     };
 
-    let best = null;
+    // Continuity: once we have a tempo, favour candidates near it or at an octave of it, so a
+    // few bars of syncopation can't flip the clock to a 3:4 / 4:3 relative.
+    // Only trust continuity once the tempo has been confirmed by a few consecutive estimates;
+    // a first guess made 2-3 s into the track must stay easy to overturn.
+    const trust = Math.min(1, this._stable / 4);
+    const cont = (P) => {
+      if (!(this.period > 0) || trust <= 0) return 1;
+      const r = Math.log2(P / this.period);
+      const d = Math.min(Math.abs(r), Math.abs(r - 1), Math.abs(r + 1));
+      return 1 + this.continuity * trust * Math.exp(-(d * d) / (2 * 0.06 * 0.06));
+    };
+    let best = null, rawBest = null;
     for (const P of this.candidates) {
-      const sc = scoreFor(P);
+      const raw = scoreFor(P);
+      const sc = raw * cont(P);
       if (!best || sc > best.score) best = { P, score: sc };
+      if (!rawBest || raw > rawBest.score) rawBest = { P, score: raw };
     }
     if (!best || best.score <= 0) return;
+    // Trust bookkeeping: if the *unboosted* evidence keeps preferring a different tempo, the
+    // current lock is probably wrong (e.g. a 3:4 relative picked in the first seconds). Let the
+    // continuity trust decay so the switch can happen after ~2 s instead of never.
+    if (this.period > 0) {
+      const rawCurrent = scoreFor(this.period);
+      const rawNear = Math.abs(rawBest.P - this.period) / this.period < 0.04;
+      if (!rawNear && rawBest.score > rawCurrent * this.hysteresis) this._stable = Math.max(0, this._stable - 2);
+      else this._stable = Math.min(8, this._stable + 1);
+    }
     // refine with a finer local search (0.1 BPM)
     const bpm0 = 60 / best.P;
     for (let b = bpm0 - 0.5; b <= bpm0 + 0.5; b += 0.1) {
-      const P = 60 / b; const sc = scoreFor(P);
+      const P = 60 / b; const sc = scoreFor(P) * cont(P);
       if (sc > best.score) best = { P, score: sc };
     }
 
-    const currentScore = this.period > 0 ? scoreFor(this.period) : 0;
+    const currentScore = this.period > 0 ? scoreFor(this.period) * cont(this.period) : 0;
     const isNear = this.period > 0 && Math.abs(best.P - this.period) / this.period < 0.04;
+    // a tempo change must win `switchVotes` consecutive estimates before we take it
+    if (!isNear && this.period > 0 && best.score > currentScore * this.hysteresis) {
+      const same = this._pending && Math.abs(this._pending.P - best.P) / best.P < 0.03;
+      this._pending = { P: best.P, votes: same ? this._pending.votes + 1 : 1 };
+      const needed = trust >= 1 ? this.switchVotes : 1;
+      if (this._pending.votes < needed) { this.lastEstimate = now; this._estimatePhase(now); return; }
+      this._pending = null;
+      this._stable = 0;
+    } else {
+      this._pending = null;
+    }
     if (this.period === 0 || isNear || best.score > currentScore * this.hysteresis) {
       const on = this.onsets;
       if (this.period === 0) {
@@ -389,11 +431,15 @@ export class BeatTracker {
     // decay tempo if the music stops
     const lastOn = this.onsets[this.onsets.length - 1];
     const silentFor = lastOn ? now - lastOn.t : Infinity;
-    const locked = silentFor < 2.5 && this.hits.length >= 4 && hits > 0.4;
+    // lock once a few beats have been confirmed; keep it while the music keeps producing onsets
+    if (this.hits.length >= 3 && hits > 0.4 && silentFor < 2.5) this._locked = true;
+    if (silentFor > 4 || (this.hits.length >= 8 && hits < 0.2)) this._locked = false;
+    const locked = this._locked;
     return { bpm: this.bpm, period: this.period, phase, beat, beatIndex: idx, confidence: hits, locked };
   }
 
   reset() {
+    this._locked = false; this._pending = null; this._stable = 0;
     this.nov.fill(0); this.lastBin = -1; this.firstBin = -1;
     this.onsets.length = 0; this.hits.length = 0;
     this.bpm = 0; this.period = 0; this.score = 0; this.anchor = 0; this.beatIndex = -1;

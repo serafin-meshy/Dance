@@ -54,6 +54,7 @@ function meshyProxy(env) {
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
   return {
+    base: './',
     plugins: [meshyProxy(env)],
     server: { port: 5173, host: true },
     build: { target: 'es2022', sourcemap: false, chunkSizeWarningLimit: 1200 },
