@@ -111,10 +111,14 @@ onsets, bpm, phase, beat…) are also handy for lights and VFX.
   switches, chosen by energy. **Dancer** layers rest/clip → move → springs (kick: hips drop +
   knee squash; snare: arm pump + nod; hats: shoulder shimmy) in world axes.
 
-Verified in this repo on three.js' Mixamo-rigged *Xbot* and *Soldier*, Khronos' *CesiumMan*
-and *RiggedFigure*, and the *Bad Cat* / *j_s_song* tracks from the three.js examples (real
-music: steady 140 BPM lock on 86% of a 4-minute track; the ambient track correctly yields no
-beat and falls back to transient-only motion).
+Verified end to end against the live Meshy API: a Text-to-3D character (`pose_mode: a-pose`,
+20 + 10 credits) rigged in about 5 s for 5 credits, returned with a 24-joint Mixamo-style
+skeleton (`Hips, Spine, Spine01, Spine02, neck, Head, LeftArm, LeftForeArm, LeftUpLeg,
+LeftLeg, …`) that maps 22/22, danced live and baked to a 4-minute real track (steady 140 BPM
+lock on ~90% of it); a library action (`action_id` 591, Hip Hop Dance, 3 credits) loads as a
+clip and beat-locks. Also verified on three.js' Mixamo-rigged *Xbot* / *Soldier* and Khronos'
+*CesiumMan* / *RiggedFigure*; an ambient track correctly yields no beat and falls back to
+transient-only motion.
 
 ## Tests
 ```bash
