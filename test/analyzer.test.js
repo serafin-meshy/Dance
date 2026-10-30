@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { scaleBeat } from '../src/audio/AudioAnalyzer.js';
+import { scaleBeat } from '../src/audio/pipeline.js';
 
 test('scaleBeat doubles and halves the beat clock consistently', () => {
   const b = { bpm: 100, period: 0.6, beatIndex: 5, phase: 0.75, beat: false, confidence: 1, locked: true };

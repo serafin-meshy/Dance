@@ -83,21 +83,25 @@ export class Scene {
 
   /** Put the model on the floor, normalise its height to ~1.75m, frame the camera. */
   setModel(object, { targetHeight = 1.75 } = {}) {
-    if (this.model) { this.scene.remove(this.model); disposeTree(this.model); }
+    if (this.holder) { this.scene.remove(this.holder); disposeTree(this.holder); }
     if (this.skeletonHelper) { this.scene.remove(this.skeletonHelper); this.skeletonHelper = null; }
-    this.model = object;
-    object.updateWorldMatrix(true, true);
+    // The model keeps its native transform (so exports stay in the author's units); a holder group
+    // carries the view normalisation.
+    const holder = new THREE.Group(); holder.name = 'ModelHolder';
+    holder.add(object);
+    this.model = object; this.holder = holder;
+    holder.updateWorldMatrix(true, true);
     const box = new THREE.Box3().setFromObject(object);
     const size = box.getSize(new THREE.Vector3());
     const h = size.y || 1;
     const s = targetHeight / h;
-    if (Math.abs(1 - s) > 0.02) object.scale.multiplyScalar(s);
-    object.updateWorldMatrix(true, true);
+    if (Math.abs(1 - s) > 0.02) holder.scale.setScalar(s);
+    holder.updateWorldMatrix(true, true);
     box.setFromObject(object);
     const center = box.getCenter(new THREE.Vector3());
-    object.position.x -= center.x; object.position.z -= center.z; object.position.y -= box.min.y;
+    holder.position.x -= center.x; holder.position.z -= center.z; holder.position.y -= box.min.y;
     object.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; if (o.frustumCulled) o.frustumCulled = false; } });
-    this.scene.add(object);
+    this.scene.add(holder);
     this.controls.target.set(0, targetHeight * 0.55, 0);
     this.camera.position.set(0.6, targetHeight * 0.8, targetHeight * 2.4);
     return object;

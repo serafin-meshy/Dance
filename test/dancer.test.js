@@ -94,3 +94,22 @@ test('clip sync drives action time from the beat clock', async () => {
   d.update(features({ rms: 0.4, bpm: 120, locked: true, beatIndex: 5, phase: 0.0 }), 1 / 60); // b = 5 -> frac 0.5 -> t = 1.0
   assert.ok(Math.abs(d.action.time - 1.0) < 1e-6, `action.time ${d.action.time}`);
 });
+
+test('T-pose rigs get their arms lowered to a relaxed hang before choreography', () => {
+  const m = buildMannequin({ armDroopDeg: 0 });   // T-pose
+  const map = buildBoneMap(m);
+  const d = new Dancer(m, map);
+  assert.ok(d.neutral.armRaiseL < -1.0 && d.neutral.armRaiseR < -1.0, `neutral ${JSON.stringify(d.neutral)}`);
+  // apply the zero pose: forearm should now hang well below the shoulder
+  d.applyPose(zeroPose(), 1); m.updateWorldMatrix(true, true);
+  const sh = map.bones.leftUpperArm.getWorldPosition(new Vector3()), fa = map.bones.leftLowerArm.getWorldPosition(new Vector3());
+  assert.ok(fa.y < sh.y - 0.15, `forearm below shoulder: ${fa.y.toFixed(2)} vs ${sh.y.toFixed(2)}`);
+  // A-pose (arms 65 deg from vertical) needs less correction than T-pose; a rig already hanging
+  // at ~20 deg needs none, and arms are never raised by the correction
+  const m2 = buildMannequin({ armDroopDeg: 25 });
+  const d2 = new Dancer(m2, buildBoneMap(m2));
+  assert.ok(d2.neutral.armRaiseL < 0 && d2.neutral.armRaiseL > d.neutral.armRaiseL, `A-pose neutral ${d2.neutral.armRaiseL}`);
+  const m3 = buildMannequin({ armDroopDeg: 70 });
+  const d3 = new Dancer(m3, buildBoneMap(m3));
+  assert.ok(Math.abs(d3.neutral.armRaiseL) < 0.05, `relaxed neutral ${d3.neutral.armRaiseL}`);
+});

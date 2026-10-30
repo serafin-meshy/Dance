@@ -5,7 +5,7 @@ import { Bone, Group, Mesh, CapsuleGeometry, SphereGeometry, MeshStandardMateria
  * Limb meshes are parented to bones (no skinning) so it's cheap and always valid.
  * Built in an A-pose, facing +Z, ~1.75m tall.
  */
-export function buildMannequin({ color = 0x7fb3ff } = {}) {
+export function buildMannequin({ color = 0x7fb3ff, armDroopDeg = 25 } = {}) {
   const group = new Group(); group.name = 'Mannequin';
   const mat = new MeshStandardMaterial({ color, roughness: 0.45, metalness: 0.1 });
   const jointMat = new MeshStandardMaterial({ color: 0xffffff, roughness: 0.3, metalness: 0.2 });
@@ -24,7 +24,7 @@ export function buildMannequin({ color = 0x7fb3ff } = {}) {
   mk('Neck', 'Spine2', new Vector3(0, 0.16, 0));
   mk('Head', 'Neck', new Vector3(0, 0.1, 0));
   mk('HeadTop_End', 'Head', new Vector3(0, 0.22, 0));
-  const a = Math.PI / 180 * 25; // A-pose arm droop
+  const a = Math.PI / 180 * armDroopDeg; // A-pose arm droop (0 = T-pose)
   for (const [side, s] of [['Left', 1], ['Right', -1]]) {
     mk(`${side}Shoulder`, 'Spine2', new Vector3(s * 0.07, 0.12, 0));
     mk(`${side}Arm`, `${side}Shoulder`, new Vector3(s * 0.12, 0, 0));

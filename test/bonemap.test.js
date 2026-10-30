@@ -74,3 +74,25 @@ test('buildBoneMap falls back to structure for meaningless bone names', () => {
   assert.equal(m.bones.rightFoot.name, 'b18');
   assert.equal(m.coverage, 1);
 });
+
+test('generic CesiumMan-style names never map two slots onto one bone', () => {
+  const P = [
+    ['Skeleton_torso_joint_1', null, 0, 1, 0], ['Skeleton_torso_joint_2', 'Skeleton_torso_joint_1', 0, 0.15, 0], ['torso_joint_3', 'Skeleton_torso_joint_2', 0, 0.15, 0],
+    ['Skeleton_neck_joint_1', 'torso_joint_3', 0, 0.12, 0], ['Skeleton_neck_joint_2', 'Skeleton_neck_joint_1', 0, 0.1, 0],
+    ['Skeleton_arm_joint_L__4_', 'torso_joint_3', 0.15, 0.08, 0], ['Skeleton_arm_joint_L__3_', 'Skeleton_arm_joint_L__4_', 0.25, 0, 0], ['Skeleton_arm_joint_L__2_', 'Skeleton_arm_joint_L__3_', 0.25, 0, 0],
+    ['Skeleton_arm_joint_R', 'torso_joint_3', -0.15, 0.08, 0], ['Skeleton_arm_joint_R__2_', 'Skeleton_arm_joint_R', -0.25, 0, 0], ['Skeleton_arm_joint_R__3_', 'Skeleton_arm_joint_R__2_', -0.25, 0, 0],
+    ['leg_joint_L_1', 'Skeleton_torso_joint_1', 0.1, -0.05, 0], ['leg_joint_L_2', 'leg_joint_L_1', 0, -0.45, 0], ['leg_joint_L_3', 'leg_joint_L_2', 0, -0.45, 0], ['leg_joint_L_5', 'leg_joint_L_3', 0, -0.05, 0.12],
+    ['leg_joint_R_1', 'Skeleton_torso_joint_1', -0.1, -0.05, 0], ['leg_joint_R_2', 'leg_joint_R_1', 0, -0.45, 0], ['leg_joint_R_3', 'leg_joint_R_2', 0, -0.45, 0], ['leg_joint_R_5', 'leg_joint_R_3', 0, -0.05, 0.12],
+  ];
+  const { root } = chainFrom(null, P);
+  const m = buildBoneMap(root);
+  const used = Object.values(m.bones);
+  assert.equal(new Set(used).size, used.length, 'no bone used twice: ' + JSON.stringify(m.report.filter(r => r.bone).map(r => r.slot + '=' + r.bone)));
+  assert.equal(m.bones.hips.name, 'Skeleton_torso_joint_1');
+  assert.equal(m.bones.spine.name, 'Skeleton_torso_joint_2');
+  assert.equal(m.bones.leftUpperLeg.name, 'leg_joint_L_1');
+  assert.equal(m.bones.leftLowerLeg.name, 'leg_joint_L_2');
+  assert.equal(m.bones.leftFoot.name, 'leg_joint_L_3');
+  assert.equal(m.bones.head.name, 'Skeleton_neck_joint_2');
+  assert.equal(m.bones.leftHand.name, 'Skeleton_arm_joint_L__2_');
+});

@@ -1,9 +1,12 @@
-import { OnsetDetector, BeatTracker, EnvelopeFollower } from './dsp.js';
+import { FeaturePipeline, emptyFeatures, scaleBeat } from './pipeline.js';
+
+export { scaleBeat };
 
 /**
  * Web Audio front-end. Owns the AudioContext, an AnalyserNode and whatever source is
- * currently playing (file, mic, or the built-in demo drum machine), and turns the
- * spectrum into a per-frame `AudioFeatures` object the dancer consumes.
+ * currently playing (file, mic, or the built-in demo drum machine). Spectra are pushed into a
+ * FeaturePipeline on a high-rate timer (independent of the render loop) and the resulting
+ * `AudioFeatures` are consumed once per frame via `update()`.
  *
  * @typedef {object} AudioFeatures
  * @property {number} time            audio-clock seconds
@@ -11,19 +14,20 @@ import { OnsetDetector, BeatTracker, EnvelopeFollower } from './dsp.js';
  * @property {number} rms             overall loudness 0..1 (smoothed)
  * @property {{low:number, mid:number, high:number}} bands   smoothed band energy 0..1
  * @property {{low:number, mid:number, high:number}} flux    raw per-band spectral flux
- * @property {{low:boolean, mid:boolean, high:boolean, any:boolean}} onsets  transient this frame
+ * @property {{low:boolean, mid:boolean, high:boolean, any:boolean}} onsets  transient since last frame
  * @property {{low:number, mid:number, high:number}} strength  0..1 salience of each onset
  * @property {number} bpm
  * @property {number} phase           beat phase 0..1
- * @property {boolean} beat           true on the frame a beat boundary is crossed
+ * @property {boolean} beat           true if a beat boundary was crossed since last frame
  * @property {number} beatIndex
  * @property {number} confidence      0..1 how many recent predicted beats were confirmed
  * @property {boolean} locked
  * @property {Uint8Array} spectrum
  */
 export class AudioAnalyzer {
-  constructor({ fftSize = 2048 } = {}) {
+  constructor({ fftSize = 2048, analysisHz = 120 } = {}) {
     this.fftSize = fftSize;
+    this.analysisHz = analysisHz;
     this.ctx = null;
     this.analyser = null;
     this.gain = null;
@@ -31,41 +35,27 @@ export class AudioAnalyzer {
     this.sourceKind = 'none';
     this.mediaEl = null;
     this.demo = null;
-    this.onset = null;
-    this.beat = new BeatTracker();
-    this.rmsEnv = new EnvelopeFollower(0.02, 0.25);
-    this.bandEnv = {
-      low: new EnvelopeFollower(0.015, 0.18),
-      mid: new EnvelopeFollower(0.015, 0.18),
-      high: new EnvelopeFollower(0.01, 0.12),
-    };
+    this.stream = null;
+    this.pipeline = null;
     this.freq = null;
     this.wave = null;
-    this.lastTime = 0;
-    this.manualBpm = 0; // >0 => override tracker tempo (phase still nudged by onsets)
-    this.tempoScale = 1; // 0.5 / 1 / 2: user correction for octave-ambiguous tempos
-    /** @type {AudioFeatures} */
-    this.features = AudioAnalyzer.emptyFeatures();
-    // Analysis runs on its own high-rate timer (independent of the render loop) so onset timing
-    // stays accurate even when rendering drops to a low frame rate. Events are accumulated here
-    // and handed out on the next `update()` call.
-    this.acc = { onsets: { low: false, mid: false, high: false, any: false }, strength: { low: 0, mid: 0, high: 0 }, beat: false };
-    this.analysisHz = 120;
     this._timer = null;
-    this._lastBeatIndex = -1;
+    this._manualBpm = 0;
+    this._tempoScale = 1;
+    /** @type {AudioFeatures} */
+    this.features = emptyFeatures();
+    /** The decoded buffer of the last file played (for offline baking). */
+    this.lastBuffer = null;
+    this.lastFileName = '';
   }
 
-  static emptyFeatures() {
-    return {
-      time: 0, dt: 0, rms: 0,
-      bands: { low: 0, mid: 0, high: 0 },
-      flux: { low: 0, mid: 0, high: 0 },
-      onsets: { low: false, mid: false, high: false, any: false },
-      strength: { low: 0, mid: 0, high: 0 },
-      bpm: 0, phase: 0, beat: false, beatIndex: -1, confidence: 0, locked: false,
-      spectrum: new Uint8Array(0),
-    };
-  }
+  static emptyFeatures() { return emptyFeatures(); }
+
+  get manualBpm() { return this._manualBpm; }
+  set manualBpm(v) { this._manualBpm = v; if (this.pipeline) this.pipeline.manualBpm = v; }
+  get tempoScale() { return this._tempoScale; }
+  set tempoScale(v) { this._tempoScale = v; if (this.pipeline) this.pipeline.tempoScale = v; }
+  get beat() { return this.pipeline?.beat; }
 
   async ensureContext() {
     if (!this.ctx) {
@@ -79,7 +69,9 @@ export class AudioAnalyzer {
       this.analyser.connect(this.ctx.destination);
       this.freq = new Uint8Array(this.analyser.frequencyBinCount);
       this.wave = new Float32Array(this.analyser.fftSize);
-      this.onset = new OnsetDetector({ sampleRate: this.ctx.sampleRate, fftSize: this.fftSize });
+      this.pipeline = new FeaturePipeline({ sampleRate: this.ctx.sampleRate, fftSize: this.fftSize, historyFrames: Math.round(this.analysisHz * 1.2) });
+      this.pipeline.manualBpm = this._manualBpm; this.pipeline.tempoScale = this._tempoScale;
+      this.features = this.pipeline.features;
     }
     if (this.ctx.state === 'suspended') await this.ctx.resume();
     if (!this._timer) this._timer = setInterval(() => this.analyze(), Math.round(1000 / this.analysisHz));
@@ -93,7 +85,7 @@ export class AudioAnalyzer {
     if (this.stream) { this.stream.getTracks().forEach(t => t.stop()); this.stream = null; }
     this.source = null;
     this.sourceKind = 'none';
-    this.beat.reset();
+    if (this.pipeline) this.pipeline.reset();
   }
 
   /** Play an audio File / Blob / URL through the analyser. Returns the <audio> element. */
@@ -105,12 +97,27 @@ export class AudioAnalyzer {
     el.loop = true;
     el.src = typeof fileOrUrl === 'string' ? fileOrUrl : URL.createObjectURL(fileOrUrl);
     this.mediaEl = el;
+    this.lastFile = fileOrUrl;
+    this.lastFileName = typeof fileOrUrl === 'string' ? fileOrUrl.split('/').pop() : fileOrUrl.name;
     this.source = this.ctx.createMediaElementSource(el);
     this.source.connect(this.gain);
     this.gain.gain.value = 1;
     this.sourceKind = 'file';
     await el.play();
     return el;
+  }
+
+  /** Decode the current file fully (mono Float32) for offline analysis / baking. */
+  async decodeCurrentFile() {
+    if (!this.lastFile) throw new Error('No audio file loaded');
+    await this.ensureContext();
+    const ab = typeof this.lastFile === 'string' ? await (await fetch(this.lastFile)).arrayBuffer() : await this.lastFile.arrayBuffer();
+    const buf = await this.ctx.decodeAudioData(ab.slice(0));
+    const n = buf.length, ch = buf.numberOfChannels;
+    const mono = new Float32Array(n);
+    for (let c = 0; c < ch; c++) { const d = buf.getChannelData(c); for (let i = 0; i < n; i++) mono[i] += d[i] / ch; }
+    this.lastBuffer = { pcm: mono, sampleRate: buf.sampleRate, duration: buf.duration };
+    return this.lastBuffer;
   }
 
   /** Use the microphone / line-in. Monitoring is muted to avoid feedback. */
@@ -122,7 +129,6 @@ export class AudioAnalyzer {
     });
     this.stream = stream;
     this.source = this.ctx.createMediaStreamSource(stream);
-    // analyse but don't monitor: route through a muted gain into the analyser only
     const mute = this.ctx.createGain(); mute.gain.value = 0;
     this.source.connect(this.analyser);
     this.analyser.disconnect();
@@ -147,79 +153,23 @@ export class AudioAnalyzer {
     return this.sourceKind !== 'none';
   }
 
-  /** Runs on the analysis timer: pull a spectrum, detect transients, advance the beat clock. */
+  /** Runs on the analysis timer: pull a spectrum and push it through the pipeline. */
   analyze() {
     if (!this.ctx || !this.analyser) return;
     const now = this.ctx.currentTime;
-    const dt = this.lastTime ? Math.min(0.1, now - this.lastTime) : 1 / this.analysisHz;
-    if (dt <= 0) return; // audio clock hasn't advanced (suspended / same render quantum)
-    this.lastTime = now;
-
+    if (now <= this.pipeline.lastTime) return; // audio clock hasn't advanced
     this.analyser.getByteFrequencyData(this.freq);
     this.analyser.getFloatTimeDomainData(this.wave);
-
     let sum = 0;
     for (let i = 0; i < this.wave.length; i++) sum += this.wave[i] * this.wave[i];
-    const rms = Math.sqrt(sum / this.wave.length);
-
-    const o = this.onset.process(this.freq, now);
-    this.beat.addNovelty(now, o.flux.low * 1.0 + o.flux.mid * 0.7 + o.flux.high * 0.35);
-    for (const band of ['low', 'mid', 'high']) {
-      if (o.onsets[band]) {
-        this.beat.addOnset(now, o.strength[band] * (band === 'low' ? 1.0 : band === 'mid' ? 0.8 : 0.35));
-        this.acc.onsets[band] = true; this.acc.onsets.any = true;
-        this.acc.strength[band] = Math.max(this.acc.strength[band], o.strength[band]);
-      }
-    }
-    if (this.manualBpm > 0) { this.beat.period = 60 / this.manualBpm; this.beat.bpm = this.manualBpm; }
-    const b = scaleBeat(this.beat.update(now), this.tempoScale);
-    // beat edge on the (possibly rescaled) clock
-    if (b.period > 0 && b.beatIndex !== this._lastBeatIndex) { this.acc.beat = true; }
-    this._lastBeatIndex = b.beatIndex;
-
-    const f = this.features;
-    f.time = now; f.dt = dt;
-    f.rms = this.rmsEnv.process(Math.min(1, rms * 2.5), dt);
-    f.bands.low = this.bandEnv.low.process(o.energy.low, dt);
-    f.bands.mid = this.bandEnv.mid.process(o.energy.mid, dt);
-    f.bands.high = this.bandEnv.high.process(o.energy.high, dt);
-    f.flux = o.flux;
-    f.bpm = b.bpm; f.phase = b.phase; f.beatIndex = b.beatIndex;
-    f.confidence = b.confidence; f.locked = b.locked;
-    f.spectrum = this.freq;
+    this.pipeline.push(this.freq, Math.sqrt(sum / this.wave.length), now);
   }
 
-  /**
-   * Call once per animation frame. Returns the latest continuous features plus every transient /
-   * beat event that happened since the previous call.
-   */
+  /** Call once per animation frame: latest features + all events since the previous call. */
   update() {
-    if (!this.ctx || !this.analyser) return this.features;
-    const f = this.features, a = this.acc;
-    f.onsets = { low: a.onsets.low, mid: a.onsets.mid, high: a.onsets.high, any: a.onsets.any };
-    f.strength = { low: a.strength.low, mid: a.strength.mid, high: a.strength.high };
-    f.beat = a.beat;
-    a.onsets.low = a.onsets.mid = a.onsets.high = a.onsets.any = false;
-    a.strength.low = a.strength.mid = a.strength.high = 0;
-    a.beat = false;
-    return f;
+    if (!this.pipeline) return this.features;
+    return this.pipeline.consume();
   }
-}
-
-/** Re-express a beat-clock reading at half or double tempo. */
-export function scaleBeat(b, scale) {
-  if (!b.period || scale === 1) return b;
-  if (scale === 2) {
-    const idx = b.beatIndex * 2 + (b.phase >= 0.5 ? 1 : 0);
-    const phase = (b.phase * 2) % 1;
-    return { ...b, bpm: b.bpm * 2, period: b.period / 2, beatIndex: idx, phase };
-  }
-  if (scale === 0.5) {
-    const idx = Math.floor(b.beatIndex / 2);
-    const phase = (((b.beatIndex % 2) + 2) % 2 + b.phase) / 2;
-    return { ...b, bpm: b.bpm / 2, period: b.period * 2, beatIndex: idx, phase };
-  }
-  return b;
 }
 
 /**

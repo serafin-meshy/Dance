@@ -11,6 +11,9 @@ async function api(path, init = {}) {
   });
   const text = await res.text();
   let json; try { json = JSON.parse(text); } catch { json = { raw: text }; }
+  if (json.raw !== undefined && /<!doctype|<html/i.test(text)) {
+    throw new Error('The Meshy proxy is not available on this host. Run the app locally with `npm run dev` and MESHY_API_KEY in .env, or use `npm run rig` (CLI), then load the rigged GLB here.');
+  }
   if (!res.ok) throw new Error(`Meshy ${res.status}: ${json.message || json.error || text.slice(0, 200)}`);
   return json;
 }

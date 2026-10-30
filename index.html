@@ -82,6 +82,21 @@
     </section>
 
     <section>
+      <h2>Bake for your game</h2>
+      <p class="hint">Analyses the whole song offline, dances the rig through it and exports a <b>.glb</b> with the dance as an animation clip (Unity, Unreal, Godot, three.js, Babylon…). Play the song and the clip from t=0 together in your game.</p>
+      <div class="row">
+        <label class="inline">FPS <select id="bakeFps"><option>24</option><option selected>30</option><option>60</option></select></label>
+        <label class="inline">Max s <input id="bakeMax" type="number" min="1" max="1200" value="300" /></label>
+        <label class="chk"><input id="bakeIncludeClips" type="checkbox" /> include loaded clips</label>
+      </div>
+      <div class="row">
+        <button id="bakeBtn" class="btn">Bake dance → GLB</button>
+        <button id="exportRestBtn" class="btn ghost" title="Export the model as-is (no dance)">Export model</button>
+      </div>
+      <p class="status" id="bakeStatus"></p>
+    </section>
+
+    <section>
       <h2>Rig with Meshy</h2>
       <p class="hint">Runs through the dev-server proxy. Set <code>MESHY_API_KEY</code> in <code>.env</code>.</p>
       <input id="meshyInput" type="text" placeholder="Public .glb URL or Meshy task id" />

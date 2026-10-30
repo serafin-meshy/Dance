@@ -7,6 +7,8 @@ import { AudioAnalyzer } from './audio/AudioAnalyzer.js';
 import { buildBoneMap, SLOTS } from './rig/BoneMap.js';
 import { Dancer, MOVES, DANCE_MOVES } from './rig/Dancer.js';
 import * as meshy from './meshyClient.js';
+import { analyzeOffline } from './audio/offline.js';
+import { bakeDance, exportGlb } from './rig/Baker.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -59,7 +61,8 @@ async function loadModelFile(file) {
     toast(`Loading ${file.name || 'model'}…`);
     const gltf = await loadGltf(file);
     installModel(gltf.scene, gltf.animations || []);
-    toast(`Loaded ${file.name || 'model'} · ${clips.length} clip(s)`);
+    modelName = typeof file === 'string' ? file.split('/').pop() : file.name;
+    toast(`Loaded ${modelName} · ${clips.length} clip(s)`);
   } catch (e) { console.error(e); toast(`Failed to load model: ${e.message || e}`); }
 }
 
@@ -120,7 +123,7 @@ $('clipSel').addEventListener('change', () => {
 $('showSkel').addEventListener('change', () => scene.showSkeleton($('showSkel').checked));
 $('glbFile').addEventListener('change', (e) => e.target.files[0] && loadModelFile(e.target.files[0]));
 $('clipFile').addEventListener('change', (e) => e.target.files[0] && loadClipFile(e.target.files[0]));
-$('mannequinBtn').addEventListener('click', () => { installModel(buildMannequin()); toast('Mannequin loaded'); });
+$('mannequinBtn').addEventListener('click', () => { installModel(buildMannequin()); modelName = 'mannequin'; toast('Mannequin loaded'); });
 
 $('audioFile').addEventListener('change', async (e) => {
   const f = e.target.files[0]; if (!f) return;
@@ -175,6 +178,7 @@ $('meshyRigBtn').addEventListener('click', async () => {
     status(`Downloading ${main.key}…`);
     const gltf = await loadGltf(meshy.proxiedAssetUrl(main.url));
     installModel(gltf.scene, gltf.animations || []);
+    modelName = `meshy_${id}`;
     // pull in basic animations (walking / running) as clips
     for (const u of urls.filter(u => u !== main)) {
       try { const g = await loadGltf(meshy.proxiedAssetUrl(u.url)); g.animations.forEach(c => { c.name = u.key.split('.').pop().replace(/_glb_url$/, ''); }); addClips(g.animations); } catch (e) { console.warn('clip load failed', u, e); }
@@ -202,6 +206,56 @@ $('meshyAnimBtn').addEventListener('click', async () => {
   } catch (e) { status(`Error: ${e.message}`); }
 });
 
+// ---------------------------------------------------------------- bake / export
+
+function downloadBlob(buf, name) {
+  const blob = new Blob([buf], { type: 'model/gltf-binary' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+const baseName = (s) => (s || 'model').replace(/\.[^.]+$/, '').replace(/[^\w-]+/g, '_');
+let modelName = 'mannequin';
+
+$('bakeBtn').addEventListener('click', async () => {
+  const status = (m) => { $('bakeStatus').textContent = m; };
+  if (!dancer) return status('Load a model first.');
+  if (analyzer.sourceKind !== 'file') return status('Load a song file first (baking needs the whole track).');
+  $('bakeBtn').disabled = true;
+  const wasPlaying = analyzer.mediaEl && !analyzer.mediaEl.paused;
+  try {
+    status('Decoding audio…');
+    const { pcm, sampleRate, duration } = await analyzer.decodeCurrentFile();
+    status('Analysing beats…');
+    await new Promise(r => setTimeout(r, 20));
+    const analysis = analyzeOffline(pcm, sampleRate);
+    const fps = +$('bakeFps').value || 30;
+    const end = Math.min(duration, +$('bakeMax').value || duration);
+    status(`Tempo ${analysis.bpm.toFixed(1)} BPM, locked ${Math.round(analysis.lockedFraction * 100)}% of the track. Baking ${end.toFixed(0)}s @ ${fps} fps…`);
+    await new Promise(r => setTimeout(r, 20));
+    if (analyzer.mediaEl) analyzer.mediaEl.pause();
+    const liveClip = dancer.clip; dancer.setClip(null);
+    dancer.seed(1234); dancer.resetState();
+    const clip = bakeDance(dancer, analysis, { fps, end, name: `Dance_${baseName(analyzer.lastFileName)}` });
+    dancer.resetState(); dancer.rng = Math.random; if (liveClip) dancer.setClip(liveClip);
+    status(`Exporting ${clip.duration.toFixed(1)}s clip (${clip.tracks.length} tracks)…`);
+    await new Promise(r => setTimeout(r, 20));
+    const extra = $('bakeIncludeClips').checked ? clips : [];
+    const buf = await exportGlb(model, [clip, ...extra], { embedMetadata: { tool: 'meshy-dance', audio: analyzer.lastFileName, bpm: +analysis.bpm.toFixed(2), fps, duration: +clip.duration.toFixed(3), lockedFraction: +analysis.lockedFraction.toFixed(2) } });
+    const name = `${baseName(modelName)}__dance__${baseName(analyzer.lastFileName)}.glb`;
+    downloadBlob(buf, name);
+    status(`Saved ${name} (${(buf.byteLength / 1e6).toFixed(1)} MB). In your engine: import the GLB, play clip "${clip.name}" and the song from t=0.`);
+  } catch (e) { console.error(e); status(`Bake failed: ${e.message || e}`); }
+  finally { $('bakeBtn').disabled = false; if (wasPlaying && analyzer.mediaEl) analyzer.mediaEl.play().catch(() => {}); }
+});
+
+$('exportRestBtn').addEventListener('click', async () => {
+  if (!model) return;
+  try {
+    const buf = await exportGlb(model, $('bakeIncludeClips').checked ? clips : [], { embedMetadata: { tool: 'meshy-dance' } });
+    downloadBlob(buf, `${baseName(modelName)}.glb`);
+  } catch (e) { toast(`Export failed: ${e.message}`); }
+});
+
 // ---------------------------------------------------------------- loop
 
 let toastTimer = 0;
@@ -224,6 +278,7 @@ function tick() {
 
   // meters (cheap DOM updates)
   $('bpmVal').textContent = f.bpm ? f.bpm.toFixed(1) : '—';
+  $('bpmVal').style.opacity = f.locked ? '1' : '0.45';
   const lock = $('lockPill'); lock.textContent = f.locked ? `locked ${Math.round(f.confidence * 100)}%` : (f.bpm ? 'tracking' : 'unlocked'); lock.classList.toggle('ok', f.locked);
   $('phaseBar').style.width = `${(1 - f.phase) * 100}%`;
   $('bandLow').style.height = `${Math.min(100, f.bands.low * 130)}%`;
